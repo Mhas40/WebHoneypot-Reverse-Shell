@@ -1,0 +1,160 @@
+##Code of honeypot
+
+from flask import Flask, render_template, request, redirect
+import os
+import datetime
+import subprocess
+app = Flask(__name__)
+
+UPLOAD_FOLDER = "uploads"
+os.makedirs(UPLOAD_FOLDER, exist_ok=True)
+# --------------------------
+# Logging Function
+# --------------------------
+def log_event(endpoint, data):
+    with open("attack_logs.txt", "a") as f:
+        log = f"{datetime.datetime.now()} | {request.remote_addr} | {endpoint} | {data}\n"
+        f.write(log)
+
+# --------------------------
+# Home Page
+# --------------------------
+@app.route('/')
+def index():
+    return """
+    <h1>TrapWeb Honeypot</h1>
+    <ul>
+        <li><a href="/login">login</a></li>
+        <li><a href="/comment">comment</a></li>
+        <li><a href="/upload">Upload</a></li>
+        <li><a href="/admin">admin</a></li>
+    </ul>
+    """
+
+# --------------------------
+# Vulnerable Login Page (SQLi Trap)
+# --------------------------
+@app.route('/login', methods=["GET", "POST"])
+def login():
+    if request.method == "POST":
+        log_event("/login", request.form)
+        username = request.form.get("username", "admin")
+        password = request.form.get("password", "admin")
+
+        # Simulated SQLi trap
+        if "' or 1=1--" in username.lower() or "'--" in username.lower():
+            return "<h2>Welcome admin (SQL Injection Successful)</h2>"
+
+        if username == "admin" and password == "admin":
+            return redirect("/dashboard")
+        else:
+            return '''
+                <h2>Login Page</h2>
+                <p style="color:red;">Invalid credentials</p>
+                <form method="post">
+                    Username: <input type="text" name="username"><br><br>
+                    Password: <input type="password" name="password"><br><br>
+                    <input type="submit" value="Login">
+                </form>
+            '''
+    return '''
+        <h2>Login Page</h2>
+        <form method="post">
+            Username: <input type="text" name="username"><br><br>
+            Password: <input type="password" name="password"><br><br>
+            <input type="submit" value="Login">
+        </form>
+    '''
+
+# --------------------------
+# Fake Admin Dashboard
+# --------------------------
+@app.route('/dashboard')
+def dashboard():
+    return "<h2>Welcome to the Admin Dashboard</h2><p>You are now logged in.</p>"
+
+# --------------------------
+# XSS Comment Trap
+# --------------------------
+@app.route('/comment', methods=["GET", "POST"])
+def comment():
+    if request.method == "POST":
+        comment = request.form.get("comment", "")
+        log_event("/comment", {"comment": comment})
+        return f"<h3>Thanks for your comment:</h3><div>{comment}</div>"
+    
+    return '''
+        <h2>Leave a Comment (XSS Test)</h2>
+        <form method="post">
+            <textarea name="comment" rows="4" cols="50"></textarea><br><br>
+            <input type="submit" value="Submit">
+        </form>
+    '''
+
+# --------------------------
+# File Upload Trap (Optional)
+# ------------------------
+@app.route('/upload', methods=["GET", "POST"])
+def upload():
+    if request.method == "POST":
+        if 'file' not in request.files:
+            return "No file part"
+        
+        file = request.files['file']
+        if file.filename == '':
+            return "No selected file"
+
+        filename = file.filename
+        filepath = os.path.join(UPLOAD_FOLDER, filename)
+        file.save(filepath)
+
+        log_event("/upload", f"Uploaded File: {filename}")
+
+        output = ""
+        
+        # ✅ Add this block RIGHT HERE
+        if filename.endswith(".php"):
+            try:
+                # 🧨 This will execute the PHP reverse shell
+                result = subprocess.check_output(["php", filepath], stderr=subprocess.STDOUT, timeout=5)
+                output = result.decode()
+            except subprocess.CalledProcessError as e:
+                output = f"PHP Execution Error:\n{e.output.decode()}"
+            except Exception as e:
+                output = f"PHP Execution failed: {str(e)}"
+        else:
+            output = "File uploaded, but not executed (not a .php file)."
+
+        return f"<h3>Upload successful!</h3><p>Received file: {filename}</p><pre>{output}</pre>"
+
+    return '''
+        <h2>Upload a File (.php auto-exec)</h2>
+        <form method="post" enctype="multipart/form-data">
+            <input type="file" name="file"><br><br>
+            <input type="submit" value="Upload">
+        </form>
+    '''
+
+# --------------------------
+# RCE Simulation Trap
+# --------------------------
+@app.route('/ping', methods=["POST"])
+def ping():
+    ip = request.form.get("ip", "")
+    log_event("/ping", {"ip": ip})
+    simulated_command = f"ping -c 1 {ip}"
+    return f"<h3>Simulated RCE:</h3><pre>Would run: {simulated_command}</pre>"
+
+# --------------------------
+# Admin Trap
+# --------------------------
+@app.route('/admin')
+def admin():
+    log_event("/admin", "Attempted to access admin panel")
+    return "<h2>Access Denied</h2><p>This area is restricted.</p>"
+
+# --------------------------
+# Start App
+# --------------------------
+if __name__ == '__main__':
+    app.run(host="192.168.43.1", port=1234, debug=True)
